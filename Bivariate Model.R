@@ -4,12 +4,16 @@
 # Best single predictor: call_duration_seconds
 # =========================================================
 
-
-# #########################################################
-# ## [SETUP] Helper functions
-# #########################################################
+##################
+##LOAD LIBRARIES##
+##################
 
 library(ggplot2)
+library(tidymodels) #FOR rmse()
+
+#################
+##IMPORT DATASET##
+#################
 
 read_partition <- function(url) {
   data <- read.csv(url, stringsAsFactors = FALSE, check.names = FALSE)
@@ -31,33 +35,6 @@ clean_numeric_text <- function(x) {
   as.numeric(x)
 }
 
-rmse <- function(actual, predicted) {
-  sqrt(mean((actual - predicted)^2, na.rm = TRUE))
-}
-
-mae <- function(actual, predicted) {
-  mean(abs(actual - predicted), na.rm = TRUE)
-}
-
-r_squared <- function(actual, predicted) {
-  1 - sum((actual - predicted)^2, na.rm = TRUE) /
-    sum((actual - mean(actual, na.rm = TRUE))^2, na.rm = TRUE)
-}
-
-get_metrics <- function(actual, predicted) {
-  c(
-    rmse = rmse(actual, predicted),
-    mae = mae(actual, predicted),
-    r_squared = r_squared(actual, predicted)
-  )
-}
-
-
-# #########################################################
-# ## [IMPORT] Read the pre-partitioned datasets from GitHub
-# ## Assignment requirement: use train / validation / test
-# #########################################################
-
 train_url <- "https://raw.githubusercontent.com/azizaljenaie/Big-Data-Project/main/Datasets%20for%20Big%20Data/Train.csv"
 validation_url <- "https://raw.githubusercontent.com/azizaljenaie/Big-Data-Project/main/Datasets%20for%20Big%20Data/Validation.csv"
 test_url <- "https://raw.githubusercontent.com/azizaljenaie/Big-Data-Project/main/Datasets%20for%20Big%20Data/Test%20(Hold%20out).csv"
@@ -66,10 +43,9 @@ train <- read_partition(train_url)
 validation <- read_partition(validation_url)
 test <- read_partition(test_url)
 
-
-# #########################################################
-# ## [CLEANING] Convert the variables needed for regression
-# #########################################################
+####################################
+##CLEANING THE VARIABLES FOR MODELING
+####################################
 
 y_var <- "total_cost_usd"
 x_var <- "call_duration_seconds"
@@ -96,11 +72,9 @@ for (column_name in columns_to_clean) {
   test[[column_name]] <- clean_numeric_text(test[[column_name]])
 }
 
-
-# #########################################################
-# ## [STEP 1] Correlation check for the regression target
-# ## Assignment requirement: verify a moderate/strong link
-# #########################################################
+#########################################################
+##STEP 1: CORRELATION CHECK FOR THE REGRESSION TARGET####
+#########################################################
 
 correlation_table <- data.frame(
   variable = candidate_predictors,
@@ -123,48 +97,64 @@ correlation_table <- correlation_table[
 
 row.names(correlation_table) <- NULL
 
-
-# #########################################################
-# ## [STEP 2] Benchmark model
-# ## compare error to a baseline
-# #########################################################
+###########################
+##STEP 2: BENCHMARK MODEL##
+###########################
 
 benchmark_mean <- mean(train[[y_var]])
 
-train_pred_benchmark <- rep(benchmark_mean, nrow(train))
-validation_pred_benchmark <- rep(benchmark_mean, nrow(validation))
+benchmark_pred_in <- rep(benchmark_mean, nrow(train))
+benchmark_pred_out <- rep(benchmark_mean, nrow(validation))
 
+pva_benchmark_in <- data.frame(prediction = benchmark_pred_in, actual = train[[y_var]])
+pva_benchmark_out <- data.frame(prediction = benchmark_pred_out, actual = validation[[y_var]])
 
-# #########################################################
-# ## [STEP 3A] Simple linear bivariate model
-# #########################################################
+(E_IN_BENCHMARK <- as.numeric(rmse(pva_benchmark_in, actual, prediction)[3]))
+(E_OUT_BENCHMARK <- as.numeric(rmse(pva_benchmark_out, actual, prediction)[3]))
 
-linear_model <- lm(total_cost_usd ~ call_duration_seconds, data = train)
+##########################################
+##STEP 3A: SIMPLE LINEAR BIVARIATE MODEL##
+##########################################
 
-train_pred_linear <- predict(linear_model, newdata = train)
-validation_pred_linear <- predict(linear_model, newdata = validation)
-
+linear_model <- lm(total_cost_usd ~ call_duration_seconds, train)
 linear_summary <- summary(linear_model)
+linear_summary
+
 linear_confint <- confint(linear_model)
+linear_confint
 
+linear_pred_in <- predict(linear_model, train)
+linear_pred_out <- predict(linear_model, validation)
 
-# #########################################################
-# ## [STEP 3B] Log-transformed bivariate model
-# #########################################################
+pva_linear_in <- data.frame(prediction = linear_pred_in, actual = train[[y_var]])
+pva_linear_out <- data.frame(prediction = linear_pred_out, actual = validation[[y_var]])
 
-log_model <- lm(log(total_cost_usd) ~ log(call_duration_seconds + 1), data = train)
+(E_IN_LINEAR <- as.numeric(rmse(pva_linear_in, actual, prediction)[3]))
+(E_OUT_LINEAR <- as.numeric(rmse(pva_linear_out, actual, prediction)[3]))
 
-train_pred_log <- exp(predict(log_model, newdata = train))
-validation_pred_log <- exp(predict(log_model, newdata = validation))
+###########################################
+##STEP 3B: LOG-TRANSFORMED BIVARIATE MODEL##
+###########################################
 
+log_model <- lm(log(total_cost_usd) ~ log(call_duration_seconds + 1), train)
 log_summary <- summary(log_model)
+log_summary
+
 log_confint <- confint(log_model)
+log_confint
 
+log_pred_in <- exp(predict(log_model, train))
+log_pred_out <- exp(predict(log_model, validation))
 
-# #########################################################
-# ## [STEP 3C] Polynomial bivariate model
-# ## Choose degree using validation RMSE
-# #########################################################
+pva_log_in <- data.frame(prediction = log_pred_in, actual = train[[y_var]])
+pva_log_out <- data.frame(prediction = log_pred_out, actual = validation[[y_var]])
+
+(E_IN_LOG <- as.numeric(rmse(pva_log_in, actual, prediction)[3]))
+(E_OUT_LOG <- as.numeric(rmse(pva_log_out, actual, prediction)[3]))
+
+#########################################
+##STEP 3C: POLYNOMIAL BIVARIATE MODELING##
+#########################################
 
 polynomial_tuning <- data.frame(
   degree = integer(),
@@ -184,17 +174,17 @@ for (degree_value in 2:5) {
     )
   )
 
-  current_model <- lm(current_formula, data = train)
+  current_model <- lm(current_formula, train)
 
-  current_train_pred <- predict(current_model, newdata = train)
-  current_validation_pred <- predict(current_model, newdata = validation)
+  current_pred_in <- predict(current_model, train)
+  current_pred_out <- predict(current_model, validation)
 
   polynomial_tuning <- rbind(
     polynomial_tuning,
     data.frame(
       degree = degree_value,
-      train_rmse = rmse(train[[y_var]], current_train_pred),
-      validation_rmse = rmse(validation[[y_var]], current_validation_pred)
+      train_rmse = sqrt(mean((train[[y_var]] - current_pred_in)^2)),
+      validation_rmse = sqrt(mean((validation[[y_var]] - current_pred_out)^2))
     )
   )
 
@@ -206,13 +196,22 @@ best_degree <- polynomial_tuning$degree[
 ]
 
 best_polynomial_model <- polynomial_models[[paste0("degree_", best_degree)]]
-
-train_pred_poly <- predict(best_polynomial_model, newdata = train)
-validation_pred_poly <- predict(best_polynomial_model, newdata = validation)
-
 best_polynomial_summary <- summary(best_polynomial_model)
-best_polynomial_confint <- confint(best_polynomial_model)
+best_polynomial_summary
 
+best_polynomial_confint <- confint(best_polynomial_model)
+best_polynomial_confint
+
+poly_pred_in <- predict(best_polynomial_model, train)
+poly_pred_out <- predict(best_polynomial_model, validation)
+
+pva_poly_in <- data.frame(prediction = poly_pred_in, actual = train[[y_var]])
+pva_poly_out <- data.frame(prediction = poly_pred_out, actual = validation[[y_var]])
+
+(E_IN_POLY <- as.numeric(rmse(pva_poly_in, actual, prediction)[3]))
+(E_OUT_POLY <- as.numeric(rmse(pva_poly_out, actual, prediction)[3]))
+
+#WHAT IS THE PARTIAL EFFECT OF x ON y AT A CHOSEN VALUE OF x?
 x0 <- median(train[[x_var]])
 poly_coefficients <- coef(best_polynomial_model)
 partial_effect <- 0
@@ -227,24 +226,27 @@ polynomial_partial_effect <- data.frame(
   partial_effect_dy_dx_at_x0 = partial_effect
 )
 
-
-# #########################################################
-# ## [STEP 3D] Default spline model
-# ## No tuning, per assignment instructions
-# #########################################################
+####################################
+##STEP 3D: DEFAULT SPLINE MODELING##
+####################################
 
 spline_model <- smooth.spline(
   x = train[[x_var]],
   y = train[[y_var]]
 )
 
-train_pred_spline <- predict(spline_model, x = train[[x_var]])$y
-validation_pred_spline <- predict(spline_model, x = validation[[x_var]])$y
+spline_pred_in <- predict(spline_model, x = train[[x_var]])$y
+spline_pred_out <- predict(spline_model, x = validation[[x_var]])$y
 
+pva_spline_in <- data.frame(prediction = spline_pred_in, actual = train[[y_var]])
+pva_spline_out <- data.frame(prediction = spline_pred_out, actual = validation[[y_var]])
 
-# #########################################################
-# ## [STEP 3E] Compare models on train and validation sets
-# #########################################################
+(E_IN_SPLINE <- as.numeric(rmse(pva_spline_in, actual, prediction)[3]))
+(E_OUT_SPLINE <- as.numeric(rmse(pva_spline_out, actual, prediction)[3]))
+
+#######################################################
+##STEP 3E: COMPARING MODEL PERFORMANCE ON TRAIN/VALID##
+#######################################################
 
 performance_table <- data.frame(
   model = c(
@@ -255,54 +257,53 @@ performance_table <- data.frame(
     "Default Spline"
   ),
   train_rmse = c(
-    get_metrics(train[[y_var]], train_pred_benchmark)["rmse"],
-    get_metrics(train[[y_var]], train_pred_linear)["rmse"],
-    get_metrics(train[[y_var]], train_pred_log)["rmse"],
-    get_metrics(train[[y_var]], train_pred_poly)["rmse"],
-    get_metrics(train[[y_var]], train_pred_spline)["rmse"]
+    E_IN_BENCHMARK,
+    E_IN_LINEAR,
+    E_IN_LOG,
+    E_IN_POLY,
+    E_IN_SPLINE
   ),
   validation_rmse = c(
-    get_metrics(validation[[y_var]], validation_pred_benchmark)["rmse"],
-    get_metrics(validation[[y_var]], validation_pred_linear)["rmse"],
-    get_metrics(validation[[y_var]], validation_pred_log)["rmse"],
-    get_metrics(validation[[y_var]], validation_pred_poly)["rmse"],
-    get_metrics(validation[[y_var]], validation_pred_spline)["rmse"]
+    E_OUT_BENCHMARK,
+    E_OUT_LINEAR,
+    E_OUT_LOG,
+    E_OUT_POLY,
+    E_OUT_SPLINE
   ),
   train_mae = c(
-    get_metrics(train[[y_var]], train_pred_benchmark)["mae"],
-    get_metrics(train[[y_var]], train_pred_linear)["mae"],
-    get_metrics(train[[y_var]], train_pred_log)["mae"],
-    get_metrics(train[[y_var]], train_pred_poly)["mae"],
-    get_metrics(train[[y_var]], train_pred_spline)["mae"]
+    mean(abs(train[[y_var]] - benchmark_pred_in)),
+    mean(abs(train[[y_var]] - linear_pred_in)),
+    mean(abs(train[[y_var]] - log_pred_in)),
+    mean(abs(train[[y_var]] - poly_pred_in)),
+    mean(abs(train[[y_var]] - spline_pred_in))
   ),
   validation_mae = c(
-    get_metrics(validation[[y_var]], validation_pred_benchmark)["mae"],
-    get_metrics(validation[[y_var]], validation_pred_linear)["mae"],
-    get_metrics(validation[[y_var]], validation_pred_log)["mae"],
-    get_metrics(validation[[y_var]], validation_pred_poly)["mae"],
-    get_metrics(validation[[y_var]], validation_pred_spline)["mae"]
+    mean(abs(validation[[y_var]] - benchmark_pred_out)),
+    mean(abs(validation[[y_var]] - linear_pred_out)),
+    mean(abs(validation[[y_var]] - log_pred_out)),
+    mean(abs(validation[[y_var]] - poly_pred_out)),
+    mean(abs(validation[[y_var]] - spline_pred_out))
   ),
   train_r_squared = c(
-    get_metrics(train[[y_var]], train_pred_benchmark)["r_squared"],
-    get_metrics(train[[y_var]], train_pred_linear)["r_squared"],
-    get_metrics(train[[y_var]], train_pred_log)["r_squared"],
-    get_metrics(train[[y_var]], train_pred_poly)["r_squared"],
-    get_metrics(train[[y_var]], train_pred_spline)["r_squared"]
+    1 - sum((train[[y_var]] - benchmark_pred_in)^2) / sum((train[[y_var]] - mean(train[[y_var]]))^2),
+    1 - sum((train[[y_var]] - linear_pred_in)^2) / sum((train[[y_var]] - mean(train[[y_var]]))^2),
+    1 - sum((train[[y_var]] - log_pred_in)^2) / sum((train[[y_var]] - mean(train[[y_var]]))^2),
+    1 - sum((train[[y_var]] - poly_pred_in)^2) / sum((train[[y_var]] - mean(train[[y_var]]))^2),
+    1 - sum((train[[y_var]] - spline_pred_in)^2) / sum((train[[y_var]] - mean(train[[y_var]]))^2)
   ),
   validation_r_squared = c(
-    get_metrics(validation[[y_var]], validation_pred_benchmark)["r_squared"],
-    get_metrics(validation[[y_var]], validation_pred_linear)["r_squared"],
-    get_metrics(validation[[y_var]], validation_pred_log)["r_squared"],
-    get_metrics(validation[[y_var]], validation_pred_poly)["r_squared"],
-    get_metrics(validation[[y_var]], validation_pred_spline)["r_squared"]
+    1 - sum((validation[[y_var]] - benchmark_pred_out)^2) / sum((validation[[y_var]] - mean(validation[[y_var]]))^2),
+    1 - sum((validation[[y_var]] - linear_pred_out)^2) / sum((validation[[y_var]] - mean(validation[[y_var]]))^2),
+    1 - sum((validation[[y_var]] - log_pred_out)^2) / sum((validation[[y_var]] - mean(validation[[y_var]]))^2),
+    1 - sum((validation[[y_var]] - poly_pred_out)^2) / sum((validation[[y_var]] - mean(validation[[y_var]]))^2),
+    1 - sum((validation[[y_var]] - spline_pred_out)^2) / sum((validation[[y_var]] - mean(validation[[y_var]]))^2)
   ),
   stringsAsFactors = FALSE
 )
 
-
-# #########################################################
-# ## [STEP 3F] Choose the best model on validation only
-# #########################################################
+##################################################
+##STEP 3F: CHOOSE THE BEST MODEL ON VALIDATION ONLY
+##################################################
 
 candidate_models <- performance_table[
   performance_table$model != "Benchmark Mean",
@@ -312,33 +313,28 @@ best_model_name <- candidate_models$model[
   which.min(candidate_models$validation_rmse)
 ]
 
-predict_final_model <- function(model_name, new_data) {
-  if (model_name == "Linear") {
-    return(predict(linear_model, newdata = new_data))
-  }
-
-  if (model_name == "Log-Transformed") {
-    return(exp(predict(log_model, newdata = new_data)))
-  }
-
-  if (model_name == paste("Polynomial Degree", best_degree)) {
-    return(predict(best_polynomial_model, newdata = new_data))
-  }
-
-  if (model_name == "Default Spline") {
-    return(predict(spline_model, x = new_data[[x_var]])$y)
-  }
-
-  stop("Unknown model name.")
+if (best_model_name == "Linear") {
+  final_test_predictions <- predict(linear_model, test)
 }
 
-final_test_predictions <- predict_final_model(best_model_name, test)
+if (best_model_name == "Log-Transformed") {
+  final_test_predictions <- exp(predict(log_model, test))
+}
+
+if (best_model_name == paste("Polynomial Degree", best_degree)) {
+  final_test_predictions <- predict(best_polynomial_model, test)
+}
+
+if (best_model_name == "Default Spline") {
+  final_test_predictions <- predict(spline_model, x = test[[x_var]])$y
+}
 
 final_test_results <- data.frame(
   final_model = best_model_name,
-  test_rmse = rmse(test[[y_var]], final_test_predictions),
-  test_mae = mae(test[[y_var]], final_test_predictions),
-  test_r_squared = r_squared(test[[y_var]], final_test_predictions)
+  test_rmse = sqrt(mean((test[[y_var]] - final_test_predictions)^2)),
+  test_mae = mean(abs(test[[y_var]] - final_test_predictions)),
+  test_r_squared = 1 - sum((test[[y_var]] - final_test_predictions)^2) /
+    sum((test[[y_var]] - mean(test[[y_var]]))^2)
 )
 
 final_test_predictions_table <- data.frame(
@@ -347,106 +343,101 @@ final_test_predictions_table <- data.frame(
   call_duration_seconds = test[[x_var]]
 )
 
+#############################################
+##STEP 3G: ONE COMBINED BIVARIATE COMPARISON##
+#############################################
 
-# #########################################################
-# ## [STEP 3G] One combined bivariate plot
-# #########################################################
+x_grid <- seq(
+  min(c(train[[x_var]], validation[[x_var]])),
+  max(c(train[[x_var]], validation[[x_var]])),
+  length.out = 300
+)
 
-plot_bivariate_models <- function() {
-  x_grid <- seq(
-    min(c(train[[x_var]], validation[[x_var]])),
-    max(c(train[[x_var]], validation[[x_var]])),
-    length.out = 300
+plot_data <- data.frame(call_duration_seconds = x_grid)
+
+y_linear_grid <- predict(linear_model, plot_data)
+y_log_grid <- exp(predict(log_model, plot_data))
+y_poly_grid <- predict(best_polynomial_model, plot_data)
+y_spline_grid <- predict(spline_model, x = x_grid)$y
+
+point_data <- rbind(
+  data.frame(
+    call_duration_seconds = train[[x_var]],
+    total_cost_usd = train[[y_var]],
+    partition = "Train Data"
+  ),
+  data.frame(
+    call_duration_seconds = validation[[x_var]],
+    total_cost_usd = validation[[y_var]],
+    partition = "Validation Data"
   )
+)
 
-  plot_data <- data.frame(call_duration_seconds = x_grid)
-
-  y_linear_grid <- predict(linear_model, newdata = plot_data)
-  y_log_grid <- exp(predict(log_model, newdata = plot_data))
-  y_poly_grid <- predict(best_polynomial_model, newdata = plot_data)
-  y_spline_grid <- predict(spline_model, x = x_grid)$y
-
-  point_data <- rbind(
-    data.frame(
-      call_duration_seconds = train[[x_var]],
-      total_cost_usd = train[[y_var]],
-      partition = "Train Data"
-    ),
-    data.frame(
-      call_duration_seconds = validation[[x_var]],
-      total_cost_usd = validation[[y_var]],
-      partition = "Validation Data"
-    )
+curve_data <- rbind(
+  data.frame(
+    call_duration_seconds = x_grid,
+    total_cost_usd = y_linear_grid,
+    model = "Linear"
+  ),
+  data.frame(
+    call_duration_seconds = x_grid,
+    total_cost_usd = y_log_grid,
+    model = "Log"
+  ),
+  data.frame(
+    call_duration_seconds = x_grid,
+    total_cost_usd = y_poly_grid,
+    model = paste("Polynomial Degree", best_degree)
+  ),
+  data.frame(
+    call_duration_seconds = x_grid,
+    total_cost_usd = y_spline_grid,
+    model = "Spline"
   )
+)
 
-  curve_data <- rbind(
-    data.frame(
-      call_duration_seconds = x_grid,
-      total_cost_usd = y_linear_grid,
-      model = "Linear"
+bivariate_plot <- ggplot() +
+  geom_point(
+    data = point_data,
+    aes(
+      x = call_duration_seconds,
+      y = total_cost_usd,
+      shape = partition
     ),
-    data.frame(
-      call_duration_seconds = x_grid,
-      total_cost_usd = y_log_grid,
-      model = "Log"
+    color = "gray35",
+    size = 2.4,
+    alpha = 0.9
+  ) +
+  geom_line(
+    data = curve_data,
+    aes(
+      x = call_duration_seconds,
+      y = total_cost_usd,
+      color = model
     ),
-    data.frame(
-      call_duration_seconds = x_grid,
-      total_cost_usd = y_poly_grid,
-      model = paste("Polynomial Degree", best_degree)
-    ),
-    data.frame(
-      call_duration_seconds = x_grid,
-      total_cost_usd = y_spline_grid,
-      model = "Spline"
+    linewidth = 1
+  ) +
+  scale_shape_manual(
+    values = c("Train Data" = 16, "Validation Data" = 1)
+  ) +
+  scale_color_manual(
+    values = setNames(
+      c("blue", "red", "darkgreen", "purple"),
+      c("Linear", "Log", paste("Polynomial Degree", best_degree), "Spline")
     )
+  ) +
+  labs(
+    title = "Bivariate Regression Model Comparison",
+    x = "call_duration_seconds",
+    y = "total_cost_usd",
+    shape = NULL,
+    color = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    legend.position = "left"
   )
-
-  ggplot() +
-    geom_point(
-      data = point_data,
-      aes(
-        x = call_duration_seconds,
-        y = total_cost_usd,
-        shape = partition
-      ),
-      color = "gray35",
-      size = 2.4,
-      alpha = 0.9
-    ) +
-    geom_line(
-      data = curve_data,
-      aes(
-        x = call_duration_seconds,
-        y = total_cost_usd,
-        color = model
-      ),
-      linewidth = 1
-    ) +
-    scale_shape_manual(
-      values = c("Train Data" = 16, "Validation Data" = 1)
-    ) +
-    scale_color_manual(
-      values = setNames(
-        c("blue", "red", "darkgreen", "purple"),
-        c("Linear", "Log", paste("Polynomial Degree", best_degree), "Spline")
-      )
-    ) +
-    labs(
-      title = "Bivariate Regression Model Comparison",
-      x = "call_duration_seconds",
-      y = "total_cost_usd",
-      shape = NULL,
-      color = NULL
-    ) +
-    theme_minimal() +
-    theme(
-      plot.title = element_text(face = "bold", hjust = 0.5),
-      legend.position = "left"
-    )
-}
-
-bivariate_plot <- plot_bivariate_models()
 
 if (interactive()) {
   print(bivariate_plot)
@@ -458,8 +449,7 @@ bivariate_results <- list(
     uses_same_y_and_x_for_all_bivariate_models = TRUE,
     validation_used_for_model_selection = TRUE,
     test_used_only_after_final_model_selection = TRUE
-  )
-  ,
+  ),
   chosen_variables = list(
     y = y_var,
     x = x_var
@@ -481,10 +471,9 @@ bivariate_results <- list(
   bivariate_plot = bivariate_plot
 )
 
-
-# #########################################################
-# ## [CONSOLE CHECK] outputs for the report write-up
-# #########################################################
+#########################################################
+##[CONSOLE CHECK] OUTPUTS FOR THE REPORT WRITE-UP########
+#########################################################
 
 print(correlation_table)
 print(performance_table)
